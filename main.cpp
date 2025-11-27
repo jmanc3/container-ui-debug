@@ -20,7 +20,7 @@ int main()
     InitWindow(screenWidth, screenHeight, "Container debugger");
 	SetTargetFPS(165);
 
-    static float bottomSplit = .9;
+    static float bottomSplit = .91;
     static float rightSplit = .6;
     static float rightBottomSplit = .55;
     
