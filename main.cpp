@@ -5,6 +5,8 @@
 #include <exception>
 #include <fstream>
 #include <string>
+#include <format>
+#include <strings.h>
 #include <vector>
 
 #include "container.h"
@@ -13,9 +15,10 @@
 
 #define dpi 1.6f
 #define paint [](Container * root, Container * c)
+#define fz std::format
 
 static std::vector<Container *> roots;
-static Container *clicked = nullptr;
+static std::string clicked_uuid = "";
 static int total_steps = 0;
 static int current_step = 0;
 static float zoom_factor = 1.0;
@@ -32,37 +35,70 @@ static float plane_y_off = 0.0;
 #define BTN_BACK		0x116
 #define BTN_TASK		0x117
 
+// Load a TTF font (TrueType) at a specific size
+Font myFont;
+
 void add_line(Container *root, Container *c, int depth) {
     auto line = root->child(FILL_SPACE, 30 * dpi);
     line->skip_delete = true;
     line->user_data = c;
     line->custom_type = depth;
     line->when_paint = paint {
+        Container *target = (Container *) c->user_data;
         Rectangle r = {(float) c->real_bounds.x, (float) c->real_bounds.y, (float) c->real_bounds.w, (float) c->real_bounds.h};
-        if (clicked == ((Container *) c->user_data)) {
+        if (clicked_uuid == target->uuid) {
             DrawRectangleRec(r, GREEN);
         } else {
             DrawRectangleRec(r, LIGHTGRAY);
         }
         DrawRectangleLinesEx(r, std::round(1 * dpi), DARKGRAY);
         auto text = "Container: " + ((Container *) c->user_data)->uuid;
-        DrawText(text.c_str(),
-                 c->real_bounds.x + 10 * dpi + (c->custom_type * (10 * dpi)),
-                 c->real_bounds.y + c->real_bounds.h * .5 - (dpi * 18 * .5),
-                 dpi * 18, BLACK);
+        Vector2 pos;
+        pos.x = c->real_bounds.x + 10 * dpi + (c->custom_type * (10 * dpi));
+        pos.y = c->real_bounds.y + c->real_bounds.h * .5 - (dpi * 18 * .5);
+        auto texcolor = BLACK;
+        if (!target->exists)
+            texcolor = GRAY;
+        DrawTextEx(myFont, text.c_str(),
+                 pos,
+                 dpi * 18, 2.0, texcolor);
     };
     line->when_clicked = paint {
-        clicked = ((Container *) c->user_data);
+        clicked_uuid = ((Container *) c->user_data)->uuid;
     };
     for (auto child : c->children) {
         add_line(root, child, depth + 1);
     }
 };
 
+struct DataLine : UserData {
+    std::string text;
+};
+
+void add_data_line(Container *root, int depth, std::string text) {
+    auto line = root->child(FILL_SPACE, 25 * dpi);
+    auto line_data = new DataLine;
+    line_data->text = text;
+    line->user_data = line_data;
+    line->custom_type = depth;
+    line->when_paint = paint {
+        Rectangle r = {(float) c->real_bounds.x, (float) c->real_bounds.y, (float) c->real_bounds.w, (float) c->real_bounds.h};
+        auto line_data = (DataLine *) c->user_data;
+        Vector2 pos;
+        pos.x = c->real_bounds.x + 10 * dpi + (c->custom_type * (10 * dpi));
+        pos.y = c->real_bounds.y + c->real_bounds.h * .5 - (dpi * 18 * .5);
+        auto texcolor = BLACK;
+        DrawTextEx(myFont, line_data->text.c_str(),
+                 pos,
+                 dpi * 18, 2.0, texcolor);
+    };
+};
+
 Container *import_container(const nlohmann::json &j) {
   auto *c = new Container();
 
   c->uuid = j.value("id", "");
+  c->name = c->uuid;
 
   c->real_bounds.x = j.value("x", 0);
   c->real_bounds.y = j.value("y", 0);
@@ -116,7 +152,7 @@ void paint_active_root(Container *root, Container *c, float zoom, float x_off,
   int w = (int)(c->real_bounds.w * zoom);
   int h = (int)(c->real_bounds.h * zoom);
 
-  if (c == clicked) {
+  if (c->uuid == clicked_uuid) {
       col.r = 1.0;
   }
   DrawRectangle(x, y, w, h, col);
@@ -143,9 +179,9 @@ void select_container() {
 
   auto p = pierced_containers(roots[current_step], m.x, m.y);
   if (!p.empty()) {
-      clicked = p[0];
+      clicked_uuid = p[0]->uuid;
   } else {
-      clicked = nullptr;
+      clicked_uuid = "";
   }
 }
 
@@ -156,6 +192,9 @@ int main() {
   // SetConfigFlags(EVENT_BASE_FLAG_IGNORE_ENV);
 
   InitWindow(screenWidth, screenHeight, "Container debugger");
+  myFont = LoadFontEx("/home/jmanc3/.fonts/Roboto-Medium.ttf", 32, 0, 0);
+  SetTextureFilter(myFont.texture, TEXTURE_FILTER_BILINEAR); // optional for smoother text
+  //SetFont(myFont); // now DrawText() uses this font by default
   SetTargetFPS(165);
 
   static float bottomSplit = .91;
@@ -246,17 +285,40 @@ int main() {
       BeginScissorMode(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w,
                        c->real_bounds.h);
       DrawRectangle(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w,
-                    c->real_bounds.h, BLUE);
+                    c->real_bounds.h, DARKBLUE);
     };
     bottom->after_paint = paint {
         EndScissorMode();  
     };
     bottom->type = ::absolute;
     bottom->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-      static Container *previous_focus = nullptr;
-      if (previous_focus !=  clicked) {
-        previous_focus = clicked;
+      static std::string previous_focus = "";
+      static int previous_step = -1;
+      bool forced = false;
+      if (previous_step != current_step) {
+        previous_step = current_step;
+        forced = true;
+      }
+      if (previous_focus != clicked_uuid || forced) {
+        previous_focus = clicked_uuid;
         
+        //assert(false && "Add the data line by line");
+        Container *b = container_by_name(clicked_uuid, roots[current_step]);
+        if (!b)
+            return;
+        for (auto c : c->children)
+            delete c;
+        c->children.clear();
+
+        add_data_line(c, 0, b->uuid);
+        add_data_line(c, 0, fz("x: {}", b->real_bounds.x));
+        add_data_line(c, 0, fz("y: {}", b->real_bounds.y));
+        add_data_line(c, 0, fz("w: {}", b->real_bounds.w));
+        add_data_line(c, 0, fz("h: {}", b->real_bounds.h));
+        add_data_line(c, 0, fz("hovering: {}", b->state.mouse_hovering));
+        add_data_line(c, 0, fz("pressing: {}", b->state.mouse_pressing));
+        add_data_line(c, 0, fz("mouse_button_pressed: {}", b->state.mouse_button_pressed));
+        add_data_line(c, 0, fz("dragging: {}", b->state.mouse_dragging));
       }
       auto pre = c->scroll_v_real;
       c->type = ::vbox;
@@ -270,7 +332,6 @@ int main() {
     
   }
  
-
   while (!WindowShouldClose()) {
     if (IsKeyDown(KEY_RIGHT)) {
       current_step++;
@@ -283,6 +344,20 @@ int main() {
       if (current_step < 0)
           current_step = 0;
     }
+
+    if (IsKeyPressed(KEY_UP)) {
+      current_step++;
+      if (current_step > roots.size() - 1)
+        current_step = roots.size() - 1;
+    }
+    if (IsKeyPressed(KEY_DOWN)) {
+      current_step--;
+      if (current_step < 0)
+        current_step = 0;
+    }
+
+
+    
 
     static bool dragging = false;
     static Vector2 drag_start_mouse;
@@ -304,11 +379,15 @@ int main() {
     if (wheel != 0.0f && bounds_contains(right_top->real_bounds, m.x, m.y)) {
         right_top->scroll_v_visual += wheel * 100;
         right_top->scroll_v_real += wheel * 100;
+        if (right_top->scroll_v_real > 0)
+           right_top->scroll_v_real = 0;
     }
     if (wheel != 0.0f && bounds_contains(right_bottom->real_bounds, m.x, m.y)) {
         right_bottom->scroll_v_visual += wheel * 100;
         right_bottom->scroll_v_real += wheel * 100;
-    }
+        if (right_bottom->scroll_v_real > 0)
+           right_bottom->scroll_v_real = 0;
+     }
     if (wheel != 0.0f && bounds_contains(top_left->real_bounds, m.x, m.y)) {
       float old_zoom = zoom_factor;
       float new_zoom = zoom_factor * (1.0f + wheel * 0.1f);
