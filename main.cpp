@@ -2,6 +2,7 @@
 #include "raylib.h"
 #include <cmath>
 #include <event2/event.h>
+#include <exception>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -20,6 +21,43 @@ static int current_step = 0;
 static float zoom_factor = 1.0;
 static float plane_x_off = 0.0;
 static float plane_y_off = 0.0;
+
+#define BTN_MOUSE		0x110
+#define BTN_LEFT		0x110
+#define BTN_RIGHT		0x111
+#define BTN_MIDDLE		0x112
+#define BTN_SIDE		0x113
+#define BTN_EXTRA		0x114
+#define BTN_FORWARD		0x115
+#define BTN_BACK		0x116
+#define BTN_TASK		0x117
+
+void add_line(Container *root, Container *c, int depth) {
+    auto line = root->child(FILL_SPACE, 30 * dpi);
+    line->skip_delete = true;
+    line->user_data = c;
+    line->custom_type = depth;
+    line->when_paint = paint {
+        Rectangle r = {(float) c->real_bounds.x, (float) c->real_bounds.y, (float) c->real_bounds.w, (float) c->real_bounds.h};
+        if (clicked == ((Container *) c->user_data)) {
+            DrawRectangleRec(r, GREEN);
+        } else {
+            DrawRectangleRec(r, LIGHTGRAY);
+        }
+        DrawRectangleLinesEx(r, std::round(1 * dpi), DARKGRAY);
+        auto text = "Container: " + ((Container *) c->user_data)->uuid;
+        DrawText(text.c_str(),
+                 c->real_bounds.x + 10 * dpi + (c->custom_type * (10 * dpi)),
+                 c->real_bounds.y + c->real_bounds.h * .5 - (dpi * 18 * .5),
+                 dpi * 18, BLACK);
+    };
+    line->when_clicked = paint {
+        clicked = ((Container *) c->user_data);
+    };
+    for (auto child : c->children) {
+        add_line(root, child, depth + 1);
+    }
+};
 
 Container *import_container(const nlohmann::json &j) {
   auto *c = new Container();
@@ -142,7 +180,7 @@ int main() {
   root->pre_layout = [](Container *root, Container *c, const Bounds &b) {
     c->children[1]->wanted_bounds.w = b.w - (b.w * rightSplit);
   };
-
+  Container *top_left = nullptr;
   if (auto left = root->child(::vbox, FILL_SPACE, FILL_SPACE)) {
     left->pre_layout = [](Container *root, Container *c, const Bounds &b) {
       c->children[1]->wanted_bounds.h = b.h - (b.h * bottomSplit);
@@ -150,6 +188,7 @@ int main() {
         c->children[1]->wanted_bounds.h = 50;
     };
     auto top = left->child(FILL_SPACE, FILL_SPACE);
+    top_left = top;
     top->when_paint = paint {
       DrawRectangle(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w,
                     c->real_bounds.h, GRAY);
@@ -163,22 +202,74 @@ int main() {
       DrawText(std::to_string(current_step).c_str(), c->real_bounds.x, c->real_bounds.y, 20 * dpi, BLACK);
     };
   }
+  Container *right_top = nullptr;
+  Container *right_bottom = nullptr;
   if (auto right = root->child(400, FILL_SPACE)) {
     right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
       c->children[1]->wanted_bounds.h = b.h - (b.h * rightBottomSplit);
     };
 
-    auto top = right->child(FILL_SPACE, FILL_SPACE);
+    auto top = right->child(::vbox, FILL_SPACE, FILL_SPACE);
+    right_top = top;
+    top->type = ::absolute;
+    top->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+      static int previous_step = -1;
+      if (previous_step != current_step) {
+        previous_step = current_step;
+        for (auto c : c->children)
+            delete c;
+        c->children.clear();
+
+        add_line(c, roots[current_step], 0);
+      }
+      auto pre = c->scroll_v_real;
+      c->type = ::vbox;
+      ::layout(root, c, b);
+      c->type = ::absolute;
+      c->scroll_v_real = pre;
+      for (auto ch : c->children) {
+          modify_all(ch, 0, c->scroll_v_real);
+      }
+    };
     top->when_paint = paint {
+      BeginScissorMode(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w,
+                       c->real_bounds.h);
       DrawRectangle(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w,
                     c->real_bounds.h, LIGHTGRAY);
     };
+    top->after_paint = paint {
+        EndScissorMode();  
+    };
     auto bottom = right->child(FILL_SPACE, 500);
+    right_bottom = bottom;
     bottom->when_paint = paint {
+      BeginScissorMode(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w,
+                       c->real_bounds.h);
       DrawRectangle(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w,
                     c->real_bounds.h, BLUE);
     };
+    bottom->after_paint = paint {
+        EndScissorMode();  
+    };
+    bottom->type = ::absolute;
+    bottom->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+      static Container *previous_focus = nullptr;
+      if (previous_focus !=  clicked) {
+        previous_focus = clicked;
+        
+      }
+      auto pre = c->scroll_v_real;
+      c->type = ::vbox;
+      ::layout(root, c, b);
+      c->type = ::absolute;
+      c->scroll_v_real = pre;
+      for (auto ch : c->children) {
+          modify_all(ch, 0, c->scroll_v_real);
+      }
+    };
+    
   }
+ 
 
   while (!WindowShouldClose()) {
     if (IsKeyDown(KEY_RIGHT)) {
@@ -200,9 +291,25 @@ int main() {
 
     // --- INPUT HANDLING ---
     float wheel = GetMouseWheelMove();
-    if (wheel != 0.0f) {
-      Vector2 m = GetMousePosition();
+    Vector2 m = GetMousePosition();
 
+    bool mousePressed = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+    bool mouseReleased = IsMouseButtonReleased(MOUSE_BUTTON_LEFT);
+
+    if (mousePressed || mouseReleased) {
+        Event ev { m.x, m.y, BTN_LEFT, mousePressed ? 1 : 0};
+        mouse_event(root, ev);
+    }
+
+    if (wheel != 0.0f && bounds_contains(right_top->real_bounds, m.x, m.y)) {
+        right_top->scroll_v_visual += wheel * 100;
+        right_top->scroll_v_real += wheel * 100;
+    }
+    if (wheel != 0.0f && bounds_contains(right_bottom->real_bounds, m.x, m.y)) {
+        right_bottom->scroll_v_visual += wheel * 100;
+        right_bottom->scroll_v_real += wheel * 100;
+    }
+    if (wheel != 0.0f && bounds_contains(top_left->real_bounds, m.x, m.y)) {
       float old_zoom = zoom_factor;
       float new_zoom = zoom_factor * (1.0f + wheel * 0.1f);
 
@@ -223,7 +330,7 @@ int main() {
       plane_y_off = m.y - world_y * new_zoom;
     }
 
-    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && bounds_contains(top_left->real_bounds, m.x, m.y)) {
       dragging = true;
       select_container();
       drag_start_mouse = GetMousePosition();
