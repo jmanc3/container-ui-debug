@@ -14,6 +14,7 @@
 #define paint [](Container * root, Container * c)
 
 static std::vector<Container *> roots;
+static Container *clicked = nullptr;
 static int total_steps = 0;
 static int current_step = 0;
 static float zoom_factor = 1.0;
@@ -77,6 +78,9 @@ void paint_active_root(Container *root, Container *c, float zoom, float x_off,
   int w = (int)(c->real_bounds.w * zoom);
   int h = (int)(c->real_bounds.h * zoom);
 
+  if (c == clicked) {
+      col.r = 1.0;
+  }
   DrawRectangle(x, y, w, h, col);
 
   for (auto *child : c->children) {
@@ -88,6 +92,23 @@ void paint_active_root(Container *root, Container *c) {
   auto debug_root = roots[current_step];
   paint_active_root(debug_root, debug_root, zoom_factor, plane_x_off,
                     plane_y_off, 0);
+}
+
+void select_container() {
+  auto m = GetMousePosition();
+
+  // Deproject click 
+  m.x *= 1.0 / zoom_factor;
+  m.y *= 1.0 / zoom_factor;
+  m.x -= plane_x_off * (1 / zoom_factor);
+  m.y -= plane_y_off * (1 / zoom_factor);
+
+  auto p = pierced_containers(roots[current_step], m.x, m.y);
+  if (!p.empty()) {
+      clicked = p[0];
+  } else {
+      clicked = nullptr;
+  }
 }
 
 int main() {
@@ -204,6 +225,7 @@ int main() {
 
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
       dragging = true;
+      select_container();
       drag_start_mouse = GetMousePosition();
       drag_start_x_off = plane_x_off;
       drag_start_y_off = plane_y_off;
