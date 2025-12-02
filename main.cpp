@@ -8,10 +8,21 @@
 #include <format>
 #include <strings.h>
 #include <vector>
+#include <fontconfig/fontconfig.h>
 
 #include "container.h"
 #include "event.h"
 #include "json.hpp"
+
+std::string font_path_from_name(const std::string& family);
+
+static std::string font = font_path_from_name("SF Pro Rounded");
+#define r_bg1  CLITERAL(Color){ 61, 61, 61, 255 } 
+#define r_text1  CLITERAL(Color){ 234, 227, 229, 255 } 
+#define r_text2  CLITERAL(Color){ 180, 180, 180, 255 } 
+#define r_bg2  CLITERAL(Color){ 52, 52, 52, 255 } 
+#define r_bgactive1  CLITERAL(Color){ 61, 91, 61, 255 } 
+#define r_splitter1  CLITERAL(Color){ 100, 100, 140, 255 } 
 
 #define dpi 1.6f
 #define paint [](Container * root, Container * c)
@@ -38,8 +49,20 @@ static float plane_y_off = 0.0;
 // Load a TTF font (TrueType) at a specific size
 Font myFont;
 
+int index_within_parent(Container *parent, Container *c) {
+    if (!parent || !c)
+        return 0;
+    for (auto i = 0; i < parent->children.size(); i++) {
+        if (parent->children[i] == c) {
+            return i;
+        }
+    }
+    return 0;
+}
+
+
 void add_line(Container *root, Container *c, int depth) {
-    auto line = root->child(FILL_SPACE, 30 * dpi);
+    auto line = root->child(FILL_SPACE, 36 * dpi);
     line->skip_delete = true;
     line->user_data = c;
     line->custom_type = depth;
@@ -47,21 +70,23 @@ void add_line(Container *root, Container *c, int depth) {
         Container *target = (Container *) c->user_data;
         Rectangle r = {(float) c->real_bounds.x, (float) c->real_bounds.y, (float) c->real_bounds.w, (float) c->real_bounds.h};
         if (clicked_uuid == target->uuid) {
-            DrawRectangleRec(r, GREEN);
+            DrawRectangleRec(r, r_bgactive1);
+        } else if (index_within_parent(c->parent, c) % 2 == 0) {
+            DrawRectangleRec(r, r_bg2);
         } else {
-            DrawRectangleRec(r, LIGHTGRAY);
+            DrawRectangleRec(r, r_bg1);
         }
-        DrawRectangleLinesEx(r, std::round(1 * dpi), DARKGRAY);
+        //DrawRectangleLinesEx(r, std::round(1 * dpi), DARKGRAY);
         auto text = "Container: " + ((Container *) c->user_data)->uuid;
         Vector2 pos;
-        pos.x = c->real_bounds.x + 10 * dpi + (c->custom_type * (10 * dpi));
+        pos.x = c->real_bounds.x + 30 * dpi + (c->custom_type * (10 * dpi));
         pos.y = c->real_bounds.y + c->real_bounds.h * .5 - (dpi * 18 * .5);
         auto texcolor = BLACK;
         if (!target->exists)
             texcolor = GRAY;
         DrawTextEx(myFont, text.c_str(),
                  pos,
-                 dpi * 18, 2.0, texcolor);
+                 dpi * 18, 2.0, r_text1);
     };
     line->when_clicked = paint {
         clicked_uuid = ((Container *) c->user_data)->uuid;
@@ -72,13 +97,15 @@ void add_line(Container *root, Container *c, int depth) {
 };
 
 struct DataLine : UserData {
-    std::string text;
+    std::string title;
+    std::string content;
 };
 
-void add_data_line(Container *root, int depth, std::string text) {
-    auto line = root->child(FILL_SPACE, 25 * dpi);
+void add_data_line(Container *root, int depth, std::string title, std::string content) {
+    auto line = root->child(FILL_SPACE, 25 * dpi * 1.8);
     auto line_data = new DataLine;
-    line_data->text = text;
+    line_data->title = title;
+    line_data->content = content;
     line->user_data = line_data;
     line->custom_type = depth;
     line->when_paint = paint {
@@ -86,11 +113,13 @@ void add_data_line(Container *root, int depth, std::string text) {
         auto line_data = (DataLine *) c->user_data;
         Vector2 pos;
         pos.x = c->real_bounds.x + 10 * dpi + (c->custom_type * (10 * dpi));
-        pos.y = c->real_bounds.y + c->real_bounds.h * .5 - (dpi * 18 * .5);
+        pos.y = c->real_bounds.y + c->real_bounds.h * .5 - (dpi * 18);
         auto texcolor = BLACK;
-        DrawTextEx(myFont, line_data->text.c_str(),
-                 pos,
-                 dpi * 18, 2.0, texcolor);
+        
+        DrawTextEx(myFont, line_data->title.c_str(), pos, dpi * 18, 2.0, r_text2);
+        
+        pos.y = c->real_bounds.y + c->real_bounds.h * .5;
+        DrawTextEx(myFont, line_data->content.c_str(), pos, dpi * 18, 2.0, r_text1);
     };
 };
 
@@ -112,6 +141,12 @@ Container *import_container(const nlohmann::json &j) {
   c->state.mouse_pressing = j.value("mouse_pressing", false);
   c->state.mouse_dragging = j.value("mouse_dragging", false);
   c->state.mouse_button_pressed = j.value("mouse_button_pressed", 0);
+  c->mouse_current_x = j.value("mouse_current_x", 0);
+  c->mouse_current_y = j.value("mouse_current_y", 0);
+  c->mouse_initial_x = j.value("mouse_initial_x", 0);
+  c->mouse_initial_y = j.value("mouse_initial_y", 0);
+  c->previous_x = j.value("previous_x", 0);
+  c->previous_y = j.value("previous_y", 0);
 
   c->spacing = j.value("spacing", 0);
   c->scroll_h_real = j.value("scroll_h_real", 0);
@@ -155,7 +190,8 @@ void paint_active_root(Container *root, Container *c, float zoom, float x_off,
   if (c->uuid == clicked_uuid) {
       col.r = 1.0;
   }
-  DrawRectangle(x, y, w, h, col);
+  DrawRectangle(x, y, w, h, r_bgactive1);
+  DrawRectangle(x + 1, y + 1, w - 2, h - 2, col);
 
   for (auto *child : c->children) {
     paint_active_root(root, child, zoom, x_off, y_off, depth + 1);
@@ -192,7 +228,7 @@ int main() {
   // SetConfigFlags(EVENT_BASE_FLAG_IGNORE_ENV);
 
   InitWindow(screenWidth, screenHeight, "Container debugger");
-  myFont = LoadFontEx("/home/jmanc3/.fonts/Roboto-Medium.ttf", 32, 0, 0);
+  myFont = LoadFontEx(font.c_str(), 32, 0, 0);
   SetTextureFilter(myFont.texture, TEXTURE_FILTER_BILINEAR); // optional for smoother text
   //SetFont(myFont); // now DrawText() uses this font by default
   SetTargetFPS(165);
@@ -234,6 +270,19 @@ int main() {
 
       paint_active_root(root, c);
     };
+    top->after_paint = paint {
+      auto debug_root = roots[current_step];
+
+      // Paint cursor
+      auto zoom = zoom_factor; 
+
+      int x = (int)(debug_root->mouse_current_x * zoom + plane_x_off);
+      int y = (int)(debug_root->mouse_current_y * zoom + plane_y_off);
+      int w = (int)(10 * zoom);
+      int h = (int)(10 * zoom);
+
+      DrawRectangle(x, y, w, h, BLACK);
+    };
     auto bottom = left->child(FILL_SPACE, 60);
     bottom->when_paint = paint {
       DrawRectangle(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w,
@@ -258,7 +307,14 @@ int main() {
         for (auto c : c->children)
             delete c;
         c->children.clear();
-
+        auto title = c->child(FILL_SPACE, 36 * dpi);
+        title->when_paint = paint {
+            DrawRectangle(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, r_splitter1);
+            DrawRectangle(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h - std::round(1), r_bg1);
+            Vector2 pos = {(float) c->real_bounds.x + 20 * dpi, (float) (c->real_bounds.y + c->real_bounds.h * .5 - ((18 * dpi) * .5))};
+            DrawTextEx(myFont, "Root Tree", pos, dpi * 18, 2.0, r_text1);
+        };
+        title->z_index = 1;
         add_line(c, roots[current_step], 0);
       }
       auto pre = c->scroll_v_real;
@@ -266,7 +322,12 @@ int main() {
       ::layout(root, c, b);
       c->type = ::absolute;
       c->scroll_v_real = pre;
+      bool first = true;
       for (auto ch : c->children) {
+          if (first) {
+              first = false;
+              continue;
+          }
           modify_all(ch, 0, c->scroll_v_real);
       }
     };
@@ -285,7 +346,7 @@ int main() {
       BeginScissorMode(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w,
                        c->real_bounds.h);
       DrawRectangle(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w,
-                    c->real_bounds.h, DARKBLUE);
+                    c->real_bounds.h, r_bg1);
     };
     bottom->after_paint = paint {
         EndScissorMode();  
@@ -310,22 +371,40 @@ int main() {
             delete c;
         c->children.clear();
 
-        add_data_line(c, 0, b->uuid);
-        add_data_line(c, 0, fz("x: {}", b->real_bounds.x));
-        add_data_line(c, 0, fz("y: {}", b->real_bounds.y));
-        add_data_line(c, 0, fz("w: {}", b->real_bounds.w));
-        add_data_line(c, 0, fz("h: {}", b->real_bounds.h));
-        add_data_line(c, 0, fz("hovering: {}", b->state.mouse_hovering));
-        add_data_line(c, 0, fz("pressing: {}", b->state.mouse_pressing));
-        add_data_line(c, 0, fz("mouse_button_pressed: {}", b->state.mouse_button_pressed));
-        add_data_line(c, 0, fz("dragging: {}", b->state.mouse_dragging));
+        auto title = c->child(FILL_SPACE, 36 * dpi);
+        title->when_paint = paint {
+            DrawRectangle(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, r_splitter1);
+            DrawRectangle(c->real_bounds.x, c->real_bounds.y + std::round(1), c->real_bounds.w, c->real_bounds.h - (std::round(1) * 2), r_bg1);
+            Vector2 pos = {(float) c->real_bounds.x + 20 * dpi, (float) (c->real_bounds.y + c->real_bounds.h * .5 - ((18 * dpi) * .5))};
+            DrawTextEx(myFont, "Selected Information", pos, dpi * 18, 2.0, r_text1);
+        };
+        title->z_index = 1;
+
+        add_data_line(c, 0, "UUID", b->uuid);
+        add_data_line(c, 0, "X", fz("{}", b->real_bounds.x));
+        add_data_line(c, 0, "Y", fz("{}", b->real_bounds.y));
+        add_data_line(c, 0, "Width", fz("{}", b->real_bounds.w));
+        add_data_line(c, 0, "Height", fz("{}", b->real_bounds.h));
+        add_data_line(c, 0, "Mouse Hovering", fz("{}", b->state.mouse_hovering));
+        add_data_line(c, 0, "Mouse Pressing", fz("{}", b->state.mouse_pressing));
+        add_data_line(c, 0, "Mouse Button Pressed", fz("{}", b->state.mouse_button_pressed));
+        add_data_line(c, 0, "Mouse Dragging", fz("{}", b->state.mouse_dragging));
+        add_data_line(c, 0, "Mouse X", fz("{}", b->mouse_current_x));
+        add_data_line(c, 0, "Mouse Y", fz("{}", b->mouse_current_y));
+        add_data_line(c, 0, "Mouse Previous X", fz("{}", b->previous_x));
+        add_data_line(c, 0, "Mouse Previous Y", fz("{}", b->previous_y));
       }
       auto pre = c->scroll_v_real;
       c->type = ::vbox;
       ::layout(root, c, b);
       c->type = ::absolute;
       c->scroll_v_real = pre;
+      bool first = true;
       for (auto ch : c->children) {
+          if (first) {
+              first = false;
+              continue;
+          }
           modify_all(ch, 0, c->scroll_v_real);
       }
     };
@@ -356,9 +435,6 @@ int main() {
         current_step = 0;
     }
 
-
-    
-
     static bool dragging = false;
     static Vector2 drag_start_mouse;
     static float drag_start_x_off;
@@ -388,26 +464,34 @@ int main() {
         if (right_bottom->scroll_v_real > 0)
            right_bottom->scroll_v_real = 0;
      }
-    if (wheel != 0.0f && bounds_contains(top_left->real_bounds, m.x, m.y)) {
-      float old_zoom = zoom_factor;
-      float new_zoom = zoom_factor * (1.0f + wheel * 0.1f);
+     if (wheel != 0.0f && bounds_contains(top_left->real_bounds, m.x, m.y)) {
+       float old_zoom = zoom_factor;
 
-      // Clamp zoom
-      if (new_zoom < 0.1f)
-        new_zoom = 0.1f;
-      if (new_zoom > 10.0f)
-        new_zoom = 10.0f;
+       // Exponential zoom factor:
+       // wheel = +1 for scroll up, -1 for scroll down.
+       // zoom_speed = percentage per wheel tick.
+       const float zoom_speed = 1.10f; // 10% per step; adjust to taste
 
-      // World-space point under mouse BEFORE zoom
-      float world_x = (m.x - plane_x_off) / old_zoom;
-      float world_y = (m.y - plane_y_off) / old_zoom;
+       float new_zoom;
+       if (wheel > 0)
+         new_zoom = old_zoom * zoom_speed; // zoom out
+       else
+         new_zoom = old_zoom / zoom_speed; // zoom in
 
-      zoom_factor = new_zoom;
+       // Clamp zoom
+       new_zoom = std::clamp(new_zoom, 0.1f, 10.0f);
 
-      // Convert world point back to screen space AFTER zoom
-      plane_x_off = m.x - world_x * new_zoom;
-      plane_y_off = m.y - world_y * new_zoom;
-    }
+       // World point under mouse BEFORE zoom
+       float world_x = (m.x - plane_x_off) / old_zoom;
+       float world_y = (m.y - plane_y_off) / old_zoom;
+
+       zoom_factor = new_zoom;
+
+       // Recompute plane offset so the mouse stays fixed on the same world
+       // point
+       plane_x_off = m.x - world_x * new_zoom;
+       plane_y_off = m.y - world_y * new_zoom;
+     }
 
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && bounds_contains(top_left->real_bounds, m.x, m.y)) {
       dragging = true;
@@ -447,4 +531,29 @@ int main() {
   CloseWindow();
 
   return 0;
+}
+
+std::string font_path_from_name(const std::string& family) {
+    FcInit();
+
+    FcPattern* pat = FcPatternCreate();
+    FcPatternAddString(pat, FC_FAMILY, (const FcChar8*)family.c_str());
+    FcConfigSubstitute(nullptr, pat, FcMatchPattern);
+    FcDefaultSubstitute(pat);
+
+    FcResult result;
+    FcPattern* match = FcFontMatch(nullptr, pat, &result);
+
+    std::string path;
+
+    if (match) {
+        FcChar8* file = nullptr;
+        if (FcPatternGetString(match, FC_FILE, 0, &file) == FcResultMatch) {
+            path = reinterpret_cast<const char*>(file);
+        }
+        FcPatternDestroy(match);
+    }
+
+    FcPatternDestroy(pat);
+    return path;
 }

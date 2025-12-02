@@ -11,6 +11,10 @@ if (NOT PkgConfig_FOUND)
     message(FATAL_ERROR "You need to have pkg-config installed. On voidlinux, sudo xbps-install pkg-config")
 endif ()
 
+pkg_check_modules(FONTCONFIG REQUIRED fontconfig)
+target_include_directories(containerdebug PRIVATE ${FONTCONFIG_INCLUDE_DIRS})
+target_link_directories(containerdebug PRIVATE ${FONTCONFIG_LIBRARY_DIRS})
+target_link_libraries(containerdebug PRIVATE ${FONTCONFIG_LIBRARIES})
 
 # first you add the subdirectory
 add_subdirectory(raylib-5.5)
